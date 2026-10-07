@@ -20,16 +20,16 @@
 ## 構成
 
 - Vercel Functions（`api/mcp.ts`）で Streamable HTTP を受ける。実装は [mcp-handler](https://www.npmjs.com/package/mcp-handler) 2.x
-- 状態は持たない。ツールが呼ばれるたびに、環境変数の認証情報でらくしふにログインしてから取得する
+- 状態は持たない。ツールが呼ばれるたびに、ヘッダーか環境変数の認証情報でらくしふにログインしてから取得する
 - エンドポイントは秘密トークンで守る。トークンは URL の `?key=` か `Authorization: Bearer` で渡す
 
 ## 環境変数
 
 | 変数 | 必須 | 内容 |
 |---|---|---|
-| `RAKUSHIFU_EMPLOYEE_CODE` | 必須 | らくしふの従業員コード |
-| `RAKUSHIFU_PASSWORD` | 必須 | らくしふのパスワード |
 | `MCP_AUTH_TOKEN` | 必須 | 32 文字以上の乱数（`openssl rand -hex 32`） |
+| `RAKUSHIFU_EMPLOYEE_CODE` | 任意 | らくしふの従業員コード。ヘッダーで渡さない場合に使う |
+| `RAKUSHIFU_PASSWORD` | 任意 | らくしふのパスワード。ヘッダーで渡さない場合に使う |
 | `HOURLY_RATE` | 任意 | 時給。省略時は 1200 |
 | `TRANSPORT_COST` | 任意 | 1出勤日あたりの交通費。省略時は 0 |
 
@@ -57,22 +57,35 @@ npx @modelcontextprotocol/inspector
 
 ## claude.ai に追加する
 
-設定 → コネクタ → カスタムコネクタを追加 で、次の URL を登録します。
+設定 → コネクタ → カスタムコネクタを追加 で、URL `https://<project>.vercel.app/api/mcp` を入れ、Request headers に次の3つを設定します。
+
+| ヘッダー | 値 |
+|---|---|
+| `Authorization` | `Bearer <MCP_AUTH_TOKEN>` |
+| `X-Rakushifu-Employee-Code` | らくしふの従業員コード |
+| `X-Rakushifu-Password` | らくしふのパスワード |
+
+ヘッダーで渡した従業員コードとパスワードは、環境変数より優先されます。両方とも渡すと、Vercel に `RAKUSHIFU_EMPLOYEE_CODE` と `RAKUSHIFU_PASSWORD` を置く必要はありません。
+
+Request headers の欄が無い場合（ベータで順次公開中）は、URL にトークンを含めて登録し、らくしふの認証情報は環境変数で設定します。
 
 ```
 https://<project>.vercel.app/api/mcp?key=<MCP_AUTH_TOKEN>
 ```
 
-Claude Code からは、ヘッダーでトークンを渡せます。
+Claude Code からは次のように登録します。
 
 ```sh
 claude mcp add --transport http rakushifu https://<project>.vercel.app/api/mcp \
-  --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
+  --header "Authorization: Bearer <MCP_AUTH_TOKEN>" \
+  --header "X-Rakushifu-Employee-Code: <従業員コード>" \
+  --header "X-Rakushifu-Password: <パスワード>"
 ```
 
 ## セキュリティ上の注意
 
-- URL にトークンが含まれるので、URL を他人に見せない。漏れたら `MCP_AUTH_TOKEN` を入れ替えて再デプロイし、コネクタを登録し直す
-- `?key=` 方式では、トークンが Vercel のリクエストログと claude.ai のコネクタ設定にも残る。Vercel プロジェクトのログを見られる人を自分だけにしておく。ヘッダーを設定できるクライアントでは `Authorization: Bearer` を使う
-- らくしふのパスワードは Vercel の環境変数にだけ置く。`.env*` はコミットしない
+- トークンが漏れたら `MCP_AUTH_TOKEN` を入れ替えて再デプロイし、コネクタの設定を直す
+- `?key=` 方式では、トークンが Vercel のリクエストログにも残る。ヘッダーを設定できるならヘッダーで渡す
+- `MCP_AUTH_TOKEN` は外さない。外すと、誰でもらくしふへのログインを試せる中継サーバーになる
+- らくしふのパスワードは、コネクタのヘッダーか Vercel の環境変数（Sensitive）にだけ置く。`.env*` はコミットしない
 - らくしふの非公開 API に依存しているので、らくしふ側の変更で動かなくなることがある
