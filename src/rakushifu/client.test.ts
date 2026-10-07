@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConfirmedSchedules, login, RakushifuError } from './client.js';
+import { getConfirmedSchedules, getStoreShifts, login, RakushifuError } from './client.js';
 import { buildCookieString, parseCookieValue } from './cookies.js';
 
 function responseWithCookies(status: number, setCookies: string[]): Response {
@@ -104,6 +104,54 @@ describe('getConfirmedSchedules', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(getConfirmedSchedules('c=1', 2026, 13)).rejects.toThrow(RakushifuError);
     await expect(getConfirmedSchedules('c=1', 1999, 1)).rejects.toThrow(RakushifuError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('getStoreShifts', () => {
+  it('出勤・フロア/キッチン・時刻ありのシフトだけを、名前と時刻に絞って返す', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/ajax/organizations')) {
+        return Promise.resolve(jsonResponse({ current_user: { id: 1, email: 'me@example.com' } }));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          users: [
+            { id: 1, name: '自分', age: 20 },
+            { id: 2, name: 'Aさん', age: 30 },
+            { id: 3, name: 'Bさん' },
+            { id: 4, name: 'Cさん' },
+          ],
+          shared: [
+            { user_id: 1, attending_genre_id: 2, start_as_min: 1020, end_as_min: 1320, off: false },
+            { user_id: 2, attending_genre_id: 3, start_as_min: 600, end_as_min: 1080, off: false },
+            { user_id: 3, attending_genre_id: 2, start_as_min: null, end_as_min: null, off: true },
+            { user_id: 4, attending_genre_id: 9, start_as_min: 600, end_as_min: 1080, off: false },
+          ],
+        })
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getStoreShifts('c=1', 555, '2026-10-07');
+
+    expect(result).toEqual({
+      selfUserId: 1,
+      date: '2026-10-07',
+      members: [
+        { userId: 1, name: '自分', genreId: 2, startAsMin: 1020, endAsMin: 1320 },
+        { userId: 2, name: 'Aさん', genreId: 3, startAsMin: 600, endAsMin: 1080 },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('age');
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('store_id=555') && url.includes('start_date=2026-10-07'))).toBe(true);
+  });
+
+  it('不正な店舗 ID や日付は通信せずに拒否する', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(getStoreShifts('c=1', 0, '2026-10-07')).rejects.toThrow(RakushifuError);
+    await expect(getStoreShifts('c=1', 555, '2026/10/07')).rejects.toThrow(RakushifuError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

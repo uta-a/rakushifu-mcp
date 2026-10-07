@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { extractCredentialHeaders, isAuthorized } from './auth.js';
 import { type Credentials, ConfigError, loadAuthToken, loadSalaryDefaults, resolveCredentials } from './config.js';
 import { RakushifuError } from './rakushifu/client.js';
-import { calculateSalary, fetchSchedulesWith, getConfirmedShifts } from './tools/shifts.js';
+import { createSession } from './rakushifu/session.js';
+import { getShiftOverlaps } from './tools/overlaps.js';
+import { calculateSalary, getConfirmedShifts } from './tools/shifts.js';
 
 const yearMonthShape = {
   year: z.number().int().min(2000).max(2100).optional().describe('年（省略時は JST の今年）'),
@@ -47,7 +49,7 @@ const mcpHandler = createMcpHandler(
       },
       async (input, ctx) => {
         try {
-          return textResult(await getConfirmedShifts(fetchSchedulesWith(credentialsFrom(ctx)), input));
+          return textResult(await getConfirmedShifts(createSession(credentialsFrom(ctx)), input));
         } catch (err) {
           return errorResult(err);
         }
@@ -70,7 +72,31 @@ const mcpHandler = createMcpHandler(
       async (input, ctx) => {
         try {
           const defaults = loadSalaryDefaults();
-          return textResult(await calculateSalary(fetchSchedulesWith(credentialsFrom(ctx)), input, defaults));
+          return textResult(await calculateSalary(createSession(credentialsFrom(ctx)), input, defaults));
+        } catch (err) {
+          return errorResult(err);
+        }
+      }
+    );
+
+    server.registerTool(
+      'get_shift_overlaps',
+      {
+        title: 'シフトのかぶり確認',
+        description:
+          '指定した日に、自分の確定シフトと時間帯が重なる同じ店舗の人（フロア/キッチン別）と、重なる時間帯を返す。自分が休みの日は working: false を返す。',
+        inputSchema: z.object({
+          date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional()
+            .describe('日付 YYYY-MM-DD（省略時は JST の今日）'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: true },
+      },
+      async (input, ctx) => {
+        try {
+          return textResult(await getShiftOverlaps(createSession(credentialsFrom(ctx)), input));
         } catch (err) {
           return errorResult(err);
         }

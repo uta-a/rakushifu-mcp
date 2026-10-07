@@ -1,4 +1,4 @@
-import type { Schedule, ShiftApiResponse } from '../types/shift.js';
+import type { Schedule, ShiftApiResponse, StoreShiftsResponse } from '../types/shift.js';
 import { buildCookieString, getSetCookies, parseCookieValue } from './cookies.js';
 
 const AUTH_API = 'https://api.accounts.rakushifu.com';
@@ -77,6 +77,42 @@ export async function login(employeeCode: string, password: string): Promise<str
   return buildCookieString({ ...authCookies, ...sessionCookies });
 }
 
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** ブラウザからのアクセスに見せるためのヘッダー。refererPath は呼び出し元の画面のパス */
+function browserHeaders(cookies: string, refererPath: string): Record<string, string> {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    Cookie: cookies,
+    'User-Agent': USER_AGENT,
+    Referer: `${BASE_URL}${refererPath}`,
+  };
+}
+
+/**
+ * GET して JSON を返す。失敗は label を使った RakushifuError にする（上流の本文は出さない）
+ */
+async function fetchJson(path: string, cookies: string, refererPath: string, label: string): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, { headers: browserHeaders(cookies, refererPath) });
+  } catch {
+    throw new RakushifuError('らくしふへの接続に失敗しました');
+  }
+
+  if (!response.ok) {
+    throw new RakushifuError(`${label}の取得に失敗しました (HTTP ${response.status})`);
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new RakushifuError(`${label}の形式が想定と異なります`);
+  }
+}
+
 /**
  * 指定月の確定シフトを日付順で返す
  */
@@ -89,34 +125,12 @@ export async function getConfirmedSchedules(cookies: string, year: number, month
   const lastDay = new Date(year, month, 0).getDate();
   const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-  let response: Response;
-  try {
-    response = await fetch(
-      `${BASE_URL}/ajax/staff/v2/schedules/confirmed/me?start_date=${startDate}&end_date=${endDate}`,
-      {
-        headers: {
-          Accept: 'application/json, text/plain, */*',
-          Cookie: cookies,
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          Referer: `${BASE_URL}/staff/v2/schedules/confirmed/me`,
-        },
-      }
-    );
-  } catch {
-    throw new RakushifuError('らくしふへの接続に失敗しました');
-  }
-
-  if (!response.ok) {
-    throw new RakushifuError(`シフトデータの取得に失敗しました (HTTP ${response.status})`);
-  }
-
-  let data: ShiftApiResponse;
-  try {
-    data = (await response.json()) as ShiftApiResponse;
-  } catch {
-    throw new RakushifuError('シフトデータの形式が想定と異なります');
-  }
+  const data = (await fetchJson(
+    `/ajax/staff/v2/schedules/confirmed/me?start_date=${startDate}&end_date=${endDate}`,
+    cookies,
+    '/staff/v2/schedules/confirmed/me',
+    'シフトデータ'
+  )) as ShiftApiResponse;
   if (!Array.isArray(data?.user_submit_terms)) {
     throw new RakushifuError('シフトデータの形式が想定と異なります');
   }
@@ -124,4 +138,74 @@ export async function getConfirmedSchedules(cookies: string, year: number, month
   const schedules = data.user_submit_terms.flatMap((term) => term.schedules ?? []);
   schedules.sort((a, b) => a.date.localeCompare(b.date));
   return schedules;
+}
+
+// この店舗で扱う職種(genre)。フロア=2, キッチン=3。
+const GENRE_IDS = [2, 3];
+
+interface SharedSchedule {
+  user_id: number;
+  attending_genre_id: number;
+  start_as_min: number | null;
+  end_as_min: number | null;
+  off: boolean;
+}
+
+interface StoreUser {
+  id: number;
+  name: string;
+}
+
+/**
+ * 店舗の指定日シフト（フロア/キッチン・出勤のみ）を、個人情報を絞って返す。
+ * 元の /ajax/admin/v2/schedules は年齢・生年月日等を含むため、name・職種・時刻だけに絞る。
+ */
+export async function getStoreShifts(cookies: string, storeId: number, date: string): Promise<StoreShiftsResponse> {
+  if (!Number.isInteger(storeId) || storeId < 1 || storeId > 9_999_999) {
+    throw new RakushifuError('店舗 ID が不正です');
+  }
+  if (!DATE_PATTERN.test(date)) {
+    throw new RakushifuError('日付は YYYY-MM-DD で指定してください');
+  }
+
+  const genreQuery = GENRE_IDS.map((g) => `genre_ids[]=${g}`).join('&');
+  const referer = '/staff/v2/schedules/confirmed';
+  // 自分の user_id と店舗の指定日シフトは互いに依存しないので同時に取る
+  const [org, data] = (await Promise.all([
+    fetchJson('/ajax/organizations', cookies, referer, 'ユーザー情報'),
+    fetchJson(
+      `/ajax/admin/v2/schedules?page_ctx_name=staff&store_id=${storeId}` +
+        `&${genreQuery}&start_date=${date}&end_date=${date}&is_staff_print_page=false`,
+      cookies,
+      referer,
+      '店舗のシフト'
+    ),
+  ])) as [{ current_user?: { id?: unknown } } | null, { users?: StoreUser[]; shared?: SharedSchedule[] } | null];
+
+  const selfUserId = org?.current_user?.id;
+  if (typeof selfUserId !== 'number') {
+    throw new RakushifuError('ユーザー情報の形式が想定と異なります');
+  }
+
+  const nameById = new Map<number, string>(data?.users?.map((u) => [u.id, u.name]) ?? []);
+
+  // 出勤・フロア/キッチン・時刻ありのシフトだけを、個人情報を落として抽出
+  const members = (data?.shared ?? [])
+    .filter(
+      (s) =>
+        !s.off &&
+        GENRE_IDS.includes(s.attending_genre_id) &&
+        typeof s.start_as_min === 'number' &&
+        typeof s.end_as_min === 'number' &&
+        nameById.has(s.user_id)
+    )
+    .map((s) => ({
+      userId: s.user_id,
+      name: nameById.get(s.user_id)!,
+      genreId: s.attending_genre_id,
+      startAsMin: s.start_as_min as number,
+      endAsMin: s.end_as_min as number,
+    }));
+
+  return { selfUserId, date, members };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Schedule } from '../types/shift.js';
-import { calculateSalary, getConfirmedShifts, resolveYearMonth } from './shifts.js';
+import { calculateSalary, getConfirmedShifts, resolveYearMonth, todayJst } from './shifts.js';
 
 function makeSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -23,6 +23,10 @@ function makeSchedule(overrides: Partial<Schedule> = {}): Schedule {
   };
 }
 
+function mockSession(schedules: Schedule[]) {
+  return { getConfirmedSchedules: vi.fn().mockResolvedValue(schedules) };
+}
+
 describe('resolveYearMonth', () => {
   it('省略時は JST の当月を使う（UTC では前月末でも JST で翌月なら翌月）', () => {
     const now = new Date('2026-09-30T16:00:00Z'); // JST 2026-10-01 01:00
@@ -34,16 +38,22 @@ describe('resolveYearMonth', () => {
   });
 });
 
+describe('todayJst', () => {
+  it('UTC では前日でも JST の日付を返す', () => {
+    expect(todayJst(new Date('2026-10-06T15:30:00Z'))).toBe('2026-10-07');
+  });
+});
+
 describe('getConfirmedShifts', () => {
   it('必要な項目だけに絞り、出勤日数を数える', async () => {
-    const fetchSchedules = vi.fn().mockResolvedValue([
+    const session = mockSession([
       makeSchedule({ date: '2026-10-01', start_minute: 30 }),
       makeSchedule({ date: '2026-10-02', off: true, start_hour: null, start_minute: null, end_hour: null, end_minute: null }),
     ]);
 
-    const result = await getConfirmedShifts(fetchSchedules, { year: 2026, month: 10 });
+    const result = await getConfirmedShifts(session, { year: 2026, month: 10 });
 
-    expect(fetchSchedules).toHaveBeenCalledWith(2026, 10);
+    expect(session.getConfirmedSchedules).toHaveBeenCalledWith(2026, 10);
     expect(result).toEqual({
       year: 2026,
       month: 10,
@@ -56,8 +66,8 @@ describe('getConfirmedShifts', () => {
   });
 
   it('終了時刻が欠けている日は休み扱いにし、開始と終了をどちらも null にする', async () => {
-    const fetchSchedules = vi.fn().mockResolvedValue([makeSchedule({ end_hour: null, end_minute: null })]);
-    const result = await getConfirmedShifts(fetchSchedules, { year: 2026, month: 10 });
+    const session = mockSession([makeSchedule({ end_hour: null, end_minute: null })]);
+    const result = await getConfirmedShifts(session, { year: 2026, month: 10 });
     expect(result.shifts[0]).toMatchObject({ start: null, end: null, isOff: true });
     expect(result.workDays).toBe(0);
   });
@@ -67,8 +77,8 @@ describe('calculateSalary', () => {
   const defaults = { hourlyRate: 1200, transportCost: 300 };
 
   it('引数が無ければ既定の時給と交通費で計算する', async () => {
-    const fetchSchedules = vi.fn().mockResolvedValue([makeSchedule()]);
-    const result = await calculateSalary(fetchSchedules, { year: 2026, month: 10 }, defaults);
+    const session = mockSession([makeSchedule()]);
+    const result = await calculateSalary(session, { year: 2026, month: 10 }, defaults);
 
     // 17:00〜23:00 → 通常 5h、深夜 1h
     expect(result.settings).toEqual({ hourlyRate: 1200, transportCost: 300 });
@@ -80,8 +90,8 @@ describe('calculateSalary', () => {
   });
 
   it('引数の時給と交通費を優先する', async () => {
-    const fetchSchedules = vi.fn().mockResolvedValue([makeSchedule()]);
-    const result = await calculateSalary(fetchSchedules, { year: 2026, month: 10, hourly_rate: 1000, transport_cost: 0 }, defaults);
+    const session = mockSession([makeSchedule()]);
+    const result = await calculateSalary(session, { year: 2026, month: 10, hourly_rate: 1000, transport_cost: 0 }, defaults);
     expect(result.totalPay).toBe(5000 + 1250);
   });
 });

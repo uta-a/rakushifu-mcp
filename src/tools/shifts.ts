@@ -1,31 +1,32 @@
-import type { Credentials, SalaryDefaults } from '../config.js';
-import { getConfirmedSchedules, login } from '../rakushifu/client.js';
+import type { SalaryDefaults } from '../config.js';
+import type { RakushifuSession } from '../rakushifu/session.js';
 import { calcMonthlySalary } from '../salary/calculator.js';
-import type { Schedule } from '../types/shift.js';
 
 export interface YearMonthInput {
   year?: number;
   month?: number;
 }
 
-export type FetchSchedules = (year: number, month: number) => Promise<Schedule[]>;
+export type ScheduleSource = Pick<RakushifuSession, 'getConfirmedSchedules'>;
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
  * 省略された年月を JST の当月で埋める
  */
 export function resolveYearMonth(input: YearMonthInput, now: Date = new Date()): { year: number; month: number } {
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const jst = new Date(now.getTime() + JST_OFFSET_MS);
   return {
     year: input.year ?? jst.getUTCFullYear(),
     month: input.month ?? jst.getUTCMonth() + 1,
   };
 }
 
-export function fetchSchedulesWith(credentials: Credentials): FetchSchedules {
-  return async (year, month) => {
-    const cookies = await login(credentials.employeeCode, credentials.password);
-    return getConfirmedSchedules(cookies, year, month);
-  };
+/**
+ * JST の今日を "YYYY-MM-DD" で返す
+ */
+export function todayJst(now: Date = new Date()): string {
+  return new Date(now.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function formatTime(hour: number | null, minute: number | null): string | null {
@@ -37,9 +38,9 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export async function getConfirmedShifts(fetchSchedules: FetchSchedules, input: YearMonthInput, now?: Date) {
+export async function getConfirmedShifts(session: ScheduleSource, input: YearMonthInput, now?: Date) {
   const { year, month } = resolveYearMonth(input, now);
-  const schedules = await fetchSchedules(year, month);
+  const schedules = await session.getConfirmedSchedules(year, month);
   const shifts = schedules.map((s) => {
     const isOff = s.off || s.start_hour === null || s.end_hour === null;
     return {
@@ -65,7 +66,7 @@ export interface SalaryInput extends YearMonthInput {
 }
 
 export async function calculateSalary(
-  fetchSchedules: FetchSchedules,
+  session: ScheduleSource,
   input: SalaryInput,
   defaults: SalaryDefaults,
   now?: Date
@@ -75,7 +76,7 @@ export async function calculateSalary(
     hourlyRate: input.hourly_rate ?? defaults.hourlyRate,
     transportCost: input.transport_cost ?? defaults.transportCost,
   };
-  const schedules = await fetchSchedules(year, month);
+  const schedules = await session.getConfirmedSchedules(year, month);
   const result = calcMonthlySalary(schedules, settings);
 
   return {

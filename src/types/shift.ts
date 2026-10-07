@@ -66,3 +66,38 @@ export interface SalaryResult {
   transportTotal: number;
   totalPay: number;
 }
+
+// --- シフトかぶり表示 ---
+
+/**
+ * 店舗シフト取得プロキシ（/api/store-shifts）が返す、個人情報を絞った1シフト。
+ * 元の /ajax/admin/v2/schedules から name・職種・時刻のみを抽出したもの。
+ */
+export interface StoreShiftMember {
+  userId: number;
+  name: string;
+  genreId: number; // attending_genre_id（2=フロア, 3=キッチン）
+  startAsMin: number; // 0:00 からの分。日跨ぎは endAsMin <= startAsMin で表現
+  endAsMin: number;
+}
+
+export interface StoreShiftsResponse {
+  selfUserId: number;
+  date: string;
+  members: StoreShiftMember[]; // 指定日・自店舗・フロア/キッチン・出勤のみ（自分含む）
+}
+
+/** かぶり判定の結果1件（重なり時間帯付き） */
+export interface OverlapEntry {
+  name: string;
+  startAsMin: number;
+  endAsMin: number;
+  overlapStartAsMin: number;
+  overlapEndAsMin: number;
+}
+
+export interface OverlapResult {
+  self: { startAsMin: number; endAsMin: number } | null;
+  floor: OverlapEntry[];
+  kitchen: OverlapEntry[];
+}
