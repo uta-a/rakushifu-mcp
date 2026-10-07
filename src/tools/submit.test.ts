@@ -101,6 +101,52 @@ describe('previewDesiredShifts', () => {
 });
 
 describe('レビュー指摘の再現', () => {
+  it.each([
+    ['08:00', '16:00'],
+    ['18:00', '24:00'],
+  ])('勤務可能時間帯が17〜22時でも、店舗の範囲内の%s〜%sへ変更して提出できる', async (start, end) => {
+    const session = makeSession([makeDesired({ date: '2026-10-19' })], makeContext({
+      acceptableTimes: [
+        { weekday: 1, start_hour: 17, start_minute: 0, end_hour: 22, end_minute: 0, off: false },
+      ],
+    }));
+    const input = {
+      term_start_date: TERM,
+      changes: [{ date: '2026-10-19', kind: 'work' as const, start, end }],
+    };
+
+    const preview = await previewDesiredShifts(session, input, SECRET, NOW);
+    expect(preview.changes[0].after).toMatchObject({ start, end });
+    expect(session.submitDesiredSchedules).not.toHaveBeenCalled();
+    if (!('confirmationToken' in preview)) throw new Error('確認トークンがありません');
+
+    const result = await submitDesiredShifts(
+      session, { ...input, confirmation_token: preview.confirmationToken }, SECRET, NOW
+    );
+    expect(result).toMatchObject({ submitted: true, changedDays: 1 });
+    expect(session.submitDesiredSchedules.mock.calls[0][0]).toContainEqual(expect.objectContaining({
+      date: '2026-10-19',
+      desired_schedule: expect.objectContaining({ start_hour: Number(start.slice(0, 2)), end_hour: Number(end.slice(0, 2)) }),
+    }));
+  });
+
+  it.each([
+    ['07:45', '16:00', '08:00〜24:00'],
+    ['18:00', '24:15', '08:00〜24:00'],
+    ['12:10', '16:00', '15 分刻み'],
+  ])('勤務可能時間帯に関係なく、店舗の制約に反する%s〜%sは拒否する', async (start, end, message) => {
+    const session = makeSession([], makeContext({
+      acceptableTimes: [
+        { weekday: 1, start_hour: 17, start_minute: 0, end_hour: 22, end_minute: 0, off: false },
+      ],
+    }));
+    await expect(previewDesiredShifts(session, {
+      term_start_date: TERM,
+      changes: [{ date: '2026-10-19', kind: 'work', start, end }],
+    }, SECRET, NOW)).rejects.toThrow(message);
+    expect(session.submitDesiredSchedules).not.toHaveBeenCalled();
+  });
+
   it('変更しない日は、既存の希望の店舗と職種のまま送る', async () => {
     const session = makeSession([makeDesired({ date: '2026-10-16', attending_store_id: 777, attending_genre_id: 3 })]);
     const input = { term_start_date: TERM, changes: [{ date: '2026-10-20', kind: 'off' as const }] };

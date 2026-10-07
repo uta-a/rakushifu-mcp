@@ -1,8 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { RakushifuError } from '../rakushifu/client.js';
 import type { RakushifuSession } from '../rakushifu/session.js';
-import { parseShiftDate } from '../shifts/date.js';
-import { selectableRange, toUpsertPayload } from '../shifts/submit.js';
+import { toUpsertPayload } from '../shifts/submit.js';
 import type { DayEntry, OffType, ShiftUpsertItem } from '../types/shift.js';
 import { OFF_TYPE } from '../types/shift.js';
 import { describeEntry, type DesiredSource, formatHm, loadTermState, type TermState } from './desired.js';
@@ -118,11 +117,8 @@ export function planSubmission(state: TermState, input: SubmissionInput): Submis
 
     const startAsMin = parseTime(change.start, '開始', change.date);
     const endAsMin = parseTime(change.end, '終了', change.date);
-    const weekday = parseShiftDate(change.date).getDay();
-    const range = selectableRange(
-      context.acceptableTimes.find((a) => a.weekday === weekday),
-      store
-    );
+    // 曜日ごとの勤務可能時間帯で希望の変更を制限しない。入力範囲は閲覧ツールが返す店舗設定に揃える。
+    const range = { startAsMin: store.min_hour * 60, endAsMin: store.max_hour * 60 };
     if (startAsMin >= endAsMin) {
       throw new ToolInputError(`${change.date} は終了時刻を開始時刻より後にしてください`);
     }
