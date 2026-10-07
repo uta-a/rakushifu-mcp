@@ -38,16 +38,22 @@ function optionalAmount(env: NodeJS.ProcessEnv, name: string, fallback: number):
   return value;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/**
+ * エンドポイントのトークンだけを読む。認証前に他の設定の不備を見せないために分けている。
+ */
+export function loadAuthToken(env: NodeJS.ProcessEnv = process.env): string {
   const authToken = required(env, 'MCP_AUTH_TOKEN');
   if (authToken.length < MIN_AUTH_TOKEN_LENGTH) {
     throw new ConfigError(`環境変数 MCP_AUTH_TOKEN は ${MIN_AUTH_TOKEN_LENGTH} 文字以上にしてください`);
   }
+  return authToken;
+}
 
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     employeeCode: required(env, 'RAKUSHIFU_EMPLOYEE_CODE'),
     password: required(env, 'RAKUSHIFU_PASSWORD'),
-    authToken,
+    authToken: loadAuthToken(env),
     hourlyRate: optionalAmount(env, 'HOURLY_RATE', DEFAULT_HOURLY_RATE),
     transportCost: optionalAmount(env, 'TRANSPORT_COST', DEFAULT_TRANSPORT_COST),
   };
