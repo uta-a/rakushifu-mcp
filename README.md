@@ -62,8 +62,8 @@ npx @modelcontextprotocol/inspector
 | ヘッダー | 値 |
 |---|---|
 | `Authorization` | `Bearer <MCP_AUTH_TOKEN>` |
-| `X-Rakushifu-Employee-Code` | らくしふの従業員コード |
-| `X-Rakushifu-Password` | らくしふのパスワード |
+| `x-api-key` | らくしふの従業員コード（ヘッダー名は Claude で使える名前に合わせて流用） |
+| `x-auth-token` | らくしふのパスワード |
 
 ヘッダーで渡した従業員コードとパスワードは、環境変数より優先されます。両方とも渡すと、Vercel に `RAKUSHIFU_EMPLOYEE_CODE` と `RAKUSHIFU_PASSWORD` を置く必要はありません。
 
@@ -78,8 +78,8 @@ Claude Code からは次のように登録します。
 ```sh
 claude mcp add --transport http rakushifu https://<project>.vercel.app/api/mcp \
   --header "Authorization: Bearer <MCP_AUTH_TOKEN>" \
-  --header "X-Rakushifu-Employee-Code: <従業員コード>" \
-  --header "X-Rakushifu-Password: <パスワード>"
+  --header "x-api-key: <従業員コード>" \
+  --header "x-auth-token: <パスワード>"
 ```
 
 ## セキュリティ上の注意

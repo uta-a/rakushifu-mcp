@@ -36,7 +36,7 @@ describe('resolveCredentials', () => {
   });
 
   it('どちらにも無ければ設定方法を示して失敗する', () => {
-    expect(() => resolveCredentials({}, {})).toThrow('X-Rakushifu-Employee-Code');
+    expect(() => resolveCredentials({}, {})).toThrow('x-api-key');
     expect(() => resolveCredentials({}, { RAKUSHIFU_EMPLOYEE_CODE: '12345' })).toThrow(ConfigError);
   });
 });

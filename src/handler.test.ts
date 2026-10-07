@@ -102,8 +102,8 @@ describe('handleRequest', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const req = rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_confirmed_shifts', arguments: { year: 2026, month: 10 } } });
-    req.headers.set('X-Rakushifu-Employee-Code', '99999');
-    req.headers.set('X-Rakushifu-Password', headerPassword);
+    req.headers.set('x-api-key', '99999');
+    req.headers.set('x-auth-token', headerPassword);
     const body = await readRpc(await handleRequest(req));
 
     expect(body.result.isError).toBeUndefined();
@@ -124,7 +124,7 @@ describe('handleRequest', () => {
     );
 
     expect(body.result.isError).toBe(true);
-    expect(body.result.content[0].text).toContain('X-Rakushifu-Password');
+    expect(body.result.content[0].text).toContain('x-auth-token');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

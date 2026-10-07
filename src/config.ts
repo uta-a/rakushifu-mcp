@@ -61,14 +61,14 @@ export function resolveCredentials(
   const { employeeCode, password } = fromHeaders;
   if (employeeCode || password) {
     if (!employeeCode || !password) {
-      throw new ConfigError('ヘッダー X-Rakushifu-Employee-Code と X-Rakushifu-Password は両方設定してください');
+      throw new ConfigError('ヘッダー x-api-key と x-auth-token は両方設定してください');
     }
     return { employeeCode, password };
   }
 
   if (!env.RAKUSHIFU_EMPLOYEE_CODE || !env.RAKUSHIFU_PASSWORD) {
     throw new ConfigError(
-      'らくしふの従業員コードとパスワードが設定されていません。ヘッダー X-Rakushifu-Employee-Code と X-Rakushifu-Password か、環境変数 RAKUSHIFU_EMPLOYEE_CODE と RAKUSHIFU_PASSWORD で設定してください'
+      'らくしふの従業員コードとパスワードが設定されていません。ヘッダー x-api-key と x-auth-token か、環境変数 RAKUSHIFU_EMPLOYEE_CODE と RAKUSHIFU_PASSWORD で設定してください'
     );
   }
   return { employeeCode: env.RAKUSHIFU_EMPLOYEE_CODE, password: env.RAKUSHIFU_PASSWORD };

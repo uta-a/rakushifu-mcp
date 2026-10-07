@@ -3,18 +3,20 @@ import type { Credentials } from './config.js';
 
 /**
  * Claude のコネクタの Request headers で渡された、らくしふの認証情報を読む。
+ * コネクタで使えるヘッダー名は Anthropic が承認したものに限られるため、標準的な名前を流用している
+ * （x-api-key に従業員コード、x-auth-token にパスワード）。
  * 値の検証（長さなど）はログイン時に行う。
  */
 export function extractCredentialHeaders(request: Request): Partial<Credentials> {
   return {
-    employeeCode: request.headers.get('x-rakushifu-employee-code') || undefined,
-    password: request.headers.get('x-rakushifu-password') || undefined,
+    employeeCode: request.headers.get('x-api-key') || undefined,
+    password: request.headers.get('x-auth-token') || undefined,
   };
 }
 
 /**
  * リクエストからトークンを取り出す。
- * claude.ai のコネクタはヘッダーを設定できないので URL の `key` を優先し、無ければ Authorization: Bearer を見る。
+ * Request headers を使えないクライアント向けに URL の `key` を優先し、無ければ Authorization: Bearer を見る。
  */
 export function extractToken(request: Request): string | undefined {
   const key = new URL(request.url).searchParams.get('key');
