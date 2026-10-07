@@ -1,7 +1,7 @@
 import { createMcpHandler } from 'mcp-handler';
 import { z } from 'zod';
-import { isAuthorized } from './auth.js';
-import { ConfigError, loadAuthToken, loadConfig } from './config.js';
+import { extractCredentialHeaders, isAuthorized } from './auth.js';
+import { type Credentials, ConfigError, loadAuthToken, loadSalaryDefaults, resolveCredentials } from './config.js';
 import { RakushifuError } from './rakushifu/client.js';
 import { calculateSalary, fetchSchedulesWith, getConfirmedShifts } from './tools/shifts.js';
 
@@ -23,6 +23,18 @@ function errorResult(err: unknown) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
+interface ToolContext {
+  http?: { authInfo?: { extra?: Record<string, unknown> } };
+}
+
+/**
+ * handleRequest が authInfo.extra に入れたヘッダーの認証情報を取り出し、無ければ環境変数で補う
+ */
+function credentialsFrom(ctx: ToolContext): Credentials {
+  const fromHeaders = (ctx.http?.authInfo?.extra?.rakushifuCredentials ?? {}) as Partial<Credentials>;
+  return resolveCredentials(fromHeaders);
+}
+
 const mcpHandler = createMcpHandler(
   (server) => {
     server.registerTool(
@@ -33,10 +45,9 @@ const mcpHandler = createMcpHandler(
         inputSchema: z.object(yearMonthShape),
         annotations: { readOnlyHint: true, openWorldHint: true },
       },
-      async (input) => {
+      async (input, ctx) => {
         try {
-          const config = loadConfig();
-          return textResult(await getConfirmedShifts(fetchSchedulesWith(config), input));
+          return textResult(await getConfirmedShifts(fetchSchedulesWith(credentialsFrom(ctx)), input));
         } catch (err) {
           return errorResult(err);
         }
@@ -56,10 +67,10 @@ const mcpHandler = createMcpHandler(
         }),
         annotations: { readOnlyHint: true, openWorldHint: true },
       },
-      async (input) => {
+      async (input, ctx) => {
         try {
-          const config = loadConfig();
-          return textResult(await calculateSalary(fetchSchedulesWith(config), input, config));
+          const defaults = loadSalaryDefaults();
+          return textResult(await calculateSalary(fetchSchedulesWith(credentialsFrom(ctx)), input, defaults));
         } catch (err) {
           return errorResult(err);
         }
@@ -85,5 +96,12 @@ export async function handleRequest(request: Request): Promise<Response> {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // ヘッダーで渡されたらくしふの認証情報を、mcp-handler 経由でツールの ctx.http.authInfo に届ける
+  request.auth = {
+    token: 'static',
+    clientId: 'rakushifu-mcp',
+    scopes: [],
+    extra: { rakushifuCredentials: extractCredentialHeaders(request) },
+  };
   return mcpHandler(request);
 }

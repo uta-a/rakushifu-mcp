@@ -88,6 +88,46 @@ describe('handleRequest', () => {
     for (const tool of tools) expect(tool.annotations.readOnlyHint).toBe(true);
   });
 
+  it('ヘッダーの従業員コードとパスワードを環境変数より優先してログインし、結果にパスワードを含めない', async () => {
+    vi.stubEnv('RAKUSHIFU_EMPLOYEE_CODE', '');
+    vi.stubEnv('RAKUSHIFU_PASSWORD', '');
+    const headerPassword = 'header-password-41d8e2';
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { 'set-cookie': 'xbit_at=AT; Path=/' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { 'set-cookie': '_Rakushifu_session=S; Path=/' } }))
+      .mockResolvedValueOnce(
+        Response.json({ user_submit_terms: [{ schedules: [] }], confirmed_dates: {}, confirmed_dawns: [], hide_shift_table_for_staff: false })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const req = rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_confirmed_shifts', arguments: { year: 2026, month: 10 } } });
+    req.headers.set('X-Rakushifu-Employee-Code', '99999');
+    req.headers.set('X-Rakushifu-Password', headerPassword);
+    const body = await readRpc(await handleRequest(req));
+
+    expect(body.result.isError).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ employee_code: '99999', password: headerPassword });
+    expect(JSON.stringify(body)).not.toContain(headerPassword);
+  });
+
+  it('ヘッダーにも環境変数にも認証情報が無ければ、設定方法をツールのエラーで返す', async () => {
+    vi.stubEnv('RAKUSHIFU_EMPLOYEE_CODE', '');
+    vi.stubEnv('RAKUSHIFU_PASSWORD', '');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const body = await readRpc(
+      await handleRequest(
+        rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'get_confirmed_shifts', arguments: {} } })
+      )
+    );
+
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].text).toContain('X-Rakushifu-Password');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('ログインに失敗したらツールのエラーとして返し、パスワードを含めない', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
     const res = await handleRequest(

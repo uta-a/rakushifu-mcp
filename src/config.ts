@@ -2,10 +2,12 @@ const DEFAULT_HOURLY_RATE = 1200;
 const DEFAULT_TRANSPORT_COST = 0;
 const MIN_AUTH_TOKEN_LENGTH = 32;
 
-export interface Config {
+export interface Credentials {
   employeeCode: string;
   password: string;
-  authToken: string;
+}
+
+export interface SalaryDefaults {
   hourlyRate: number;
   transportCost: number;
 }
@@ -49,11 +51,31 @@ export function loadAuthToken(env: NodeJS.ProcessEnv = process.env): string {
   return authToken;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/**
+ * らくしふの認証情報を決める。リクエストヘッダーで渡されていればそれを使い、無ければ環境変数を使う。
+ */
+export function resolveCredentials(
+  fromHeaders: Partial<Credentials>,
+  env: NodeJS.ProcessEnv = process.env
+): Credentials {
+  const { employeeCode, password } = fromHeaders;
+  if (employeeCode || password) {
+    if (!employeeCode || !password) {
+      throw new ConfigError('ヘッダー X-Rakushifu-Employee-Code と X-Rakushifu-Password は両方設定してください');
+    }
+    return { employeeCode, password };
+  }
+
+  if (!env.RAKUSHIFU_EMPLOYEE_CODE || !env.RAKUSHIFU_PASSWORD) {
+    throw new ConfigError(
+      'らくしふの従業員コードとパスワードが設定されていません。ヘッダー X-Rakushifu-Employee-Code と X-Rakushifu-Password か、環境変数 RAKUSHIFU_EMPLOYEE_CODE と RAKUSHIFU_PASSWORD で設定してください'
+    );
+  }
+  return { employeeCode: env.RAKUSHIFU_EMPLOYEE_CODE, password: env.RAKUSHIFU_PASSWORD };
+}
+
+export function loadSalaryDefaults(env: NodeJS.ProcessEnv = process.env): SalaryDefaults {
   return {
-    employeeCode: required(env, 'RAKUSHIFU_EMPLOYEE_CODE'),
-    password: required(env, 'RAKUSHIFU_PASSWORD'),
-    authToken: loadAuthToken(env),
     hourlyRate: optionalAmount(env, 'HOURLY_RATE', DEFAULT_HOURLY_RATE),
     transportCost: optionalAmount(env, 'TRANSPORT_COST', DEFAULT_TRANSPORT_COST),
   };

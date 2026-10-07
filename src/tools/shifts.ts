@@ -1,4 +1,4 @@
-import type { Config } from '../config.js';
+import type { Credentials, SalaryDefaults } from '../config.js';
 import { getConfirmedSchedules, login } from '../rakushifu/client.js';
 import { calcMonthlySalary } from '../salary/calculator.js';
 import type { Schedule } from '../types/shift.js';
@@ -21,9 +21,9 @@ export function resolveYearMonth(input: YearMonthInput, now: Date = new Date()):
   };
 }
 
-export function fetchSchedulesWith(config: Config): FetchSchedules {
+export function fetchSchedulesWith(credentials: Credentials): FetchSchedules {
   return async (year, month) => {
-    const cookies = await login(config.employeeCode, config.password);
+    const cookies = await login(credentials.employeeCode, credentials.password);
     return getConfirmedSchedules(cookies, year, month);
   };
 }
@@ -67,7 +67,7 @@ export interface SalaryInput extends YearMonthInput {
 export async function calculateSalary(
   fetchSchedules: FetchSchedules,
   input: SalaryInput,
-  defaults: Pick<Config, 'hourlyRate' | 'transportCost'>,
+  defaults: SalaryDefaults,
   now?: Date
 ) {
   const { year, month } = resolveYearMonth(input, now);

@@ -1,4 +1,16 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import type { Credentials } from './config.js';
+
+/**
+ * Claude のコネクタの Request headers で渡された、らくしふの認証情報を読む。
+ * 値の検証（長さなど）はログイン時に行う。
+ */
+export function extractCredentialHeaders(request: Request): Partial<Credentials> {
+  return {
+    employeeCode: request.headers.get('x-rakushifu-employee-code') || undefined,
+    password: request.headers.get('x-rakushifu-password') || undefined,
+  };
+}
 
 /**
  * リクエストからトークンを取り出す。
