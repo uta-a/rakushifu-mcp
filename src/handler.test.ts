@@ -84,7 +84,7 @@ describe('handleRequest', () => {
     expect(res.status).toBe(200);
     const body = await readRpc(res);
     const tools = body.result.tools;
-    expect(tools.map((t: { name: string }) => t.name).sort()).toEqual(['calculate_salary', 'get_confirmed_shifts', 'get_shift_overlaps']);
+    expect(tools.map((t: { name: string }) => t.name).sort()).toEqual(['calculate_salary', 'get_confirmed_shifts', 'get_desired_shifts', 'get_shift_overlaps']);
     for (const tool of tools) expect(tool.annotations.readOnlyHint).toBe(true);
   });
 

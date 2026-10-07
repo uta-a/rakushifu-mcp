@@ -4,6 +4,7 @@ import { extractCredentialHeaders, isAuthorized } from './auth.js';
 import { type Credentials, ConfigError, loadAuthToken, loadSalaryDefaults, resolveCredentials } from './config.js';
 import { RakushifuError } from './rakushifu/client.js';
 import { createSession } from './rakushifu/session.js';
+import { getDesiredShifts } from './tools/desired.js';
 import { getShiftOverlaps } from './tools/overlaps.js';
 import { calculateSalary, getConfirmedShifts } from './tools/shifts.js';
 
@@ -97,6 +98,30 @@ const mcpHandler = createMcpHandler(
       async (input, ctx) => {
         try {
           return textResult(await getShiftOverlaps(createSession(credentialsFrom(ctx)), input));
+        } catch (err) {
+          return errorResult(err);
+        }
+      }
+    );
+
+    server.registerTool(
+      'get_desired_shifts',
+      {
+        title: '希望シフトの閲覧',
+        description:
+          '希望シフトの提出期間の一覧（締切、提出済みか、締切を過ぎたか）と、選んだ期間の各日の提出内容（work=出勤希望, off=休み希望, none=希望なし, fixed=確定済みで変更不可）を返す。店舗の入力可能な時間帯と刻み、休み希望の上限、曜日ごとの基本シフトも返す。',
+        inputSchema: z.object({
+          term_start_date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional()
+            .describe('提出期間の開始日 YYYY-MM-DD（省略時は締切前で最も早い期間）'),
+        }),
+        annotations: { readOnlyHint: true, openWorldHint: true },
+      },
+      async (input, ctx) => {
+        try {
+          return textResult(await getDesiredShifts(createSession(credentialsFrom(ctx)), input));
         } catch (err) {
           return errorResult(err);
         }

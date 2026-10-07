@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConfirmedSchedules, getStoreShifts, login, RakushifuError } from './client.js';
+import { getConfirmedSchedules, getDesiredSchedules, getStoreShifts, getSubmitContext, login, RakushifuError } from './client.js';
 import { buildCookieString, parseCookieValue } from './cookies.js';
 
 function responseWithCookies(status: number, setCookies: string[]): Response {
@@ -153,5 +153,64 @@ describe('getStoreShifts', () => {
     await expect(getStoreShifts('c=1', 0, '2026-10-07')).rejects.toThrow(RakushifuError);
     await expect(getStoreShifts('c=1', 555, '2026/10/07')).rejects.toThrow(RakushifuError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('getSubmitContext', () => {
+  it('6本を取り、使うフィールドだけに絞って返す', async () => {
+    const bodies: Record<string, unknown> = {
+      '/typed/api/staff/user_submit_terms': {
+        results: [{ user_id: 1, store_id: 555, start_date: '2026-10-16', end_date: '2026-10-31', submit_end_at: 'x', submitted: false, extra: 1 }],
+      },
+      '/typed/api/staff/desired_schedule_submittable_stores': {
+        results: [{ id: 555, name: '店', short_name: '店', interval_minute: 15, min_hour: 8, max_hour: 24, submittable_start_date: 'x', address: '秘密' }],
+      },
+      '/typed/api/staff/basic_shifts/me': { results: [{ weekday: 1, start_hour: 17, start_minute: 0, end_hour: 22, end_minute: 0, off: false }] },
+      '/typed/api/staff/user_acceptable_working_times': { results: [] },
+      '/typed/api/staff/desired_off_limit': { desired_off_limit: { has_limit: true, max_count: 4 } },
+      '/ajax/organizations': { current_user: { current_belong_genre_id: 2, email: 'me@example.com' } },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => Promise.resolve(jsonResponse(bodies[new URL(url).pathname])))
+    );
+
+    const ctx = await getSubmitContext('c=1');
+
+    expect(ctx.currentGenreId).toBe(2);
+    expect(ctx.terms).toEqual([{ user_id: 1, store_id: 555, start_date: '2026-10-16', end_date: '2026-10-31', submit_end_at: 'x', submitted: false }]);
+    expect(ctx.stores[0].enabled_genre_ids).toEqual([]);
+    expect(ctx.basicShifts[0].attending_store_id).toBe(0);
+    expect(ctx.offLimit).toEqual({ has_limit: true, max_count: 4 });
+    expect(JSON.stringify(ctx)).not.toMatch(/email|address|extra/);
+  });
+});
+
+describe('getDesiredSchedules', () => {
+  it('62日を超える期間や逆順の期間は通信せずに拒否する', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(getDesiredSchedules('c=1', '2026-10-01', '2026-12-31')).rejects.toThrow('62日');
+    await expect(getDesiredSchedules('c=1', '2026-10-31', '2026-10-01')).rejects.toThrow(RakushifuError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('使うフィールドだけに絞って返す', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [
+            {
+              id: 1, date: '2026-10-16', attending_store_id: 555, attending_genre_id: 2, start_hour: 17, start_minute: 0,
+              end_hour: 22, end_minute: 0, off: false, off_type: 0, memo_text: null, fixed_shift_log_id: null, user_id: 42,
+            },
+          ],
+        })
+      )
+    );
+    const result = await getDesiredSchedules('c=1', '2026-10-16', '2026-10-31');
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('user_id');
   });
 });

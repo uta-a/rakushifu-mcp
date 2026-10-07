@@ -101,3 +101,132 @@ export interface OverlapResult {
   floor: OverlapEntry[];
   kitchen: OverlapEntry[];
 }
+// --- 希望シフト提出 ---
+// らくしふの /typed/api/staff/* 系。確定シフトの /ajax/* 系とは別系統で、
+// レスポンスは snake_case。アプリ内部で持つ状態は下の DayEntry に寄せる。
+
+/** 半月単位の提出期間。submit_end_at は "+09:00" 付き ISO */
+export interface SubmitTerm {
+  user_id: number;
+  store_id: number;
+  start_date: string;
+  end_date: string;
+  submit_end_at: string;
+  submitted: boolean;
+}
+
+/** 提出先店舗。時刻入力の刻みと入力可能な時間帯を持つ */
+export interface SubmittableStore {
+  id: number;
+  name: string;
+  short_name: string;
+  interval_minute: number;
+  min_hour: number;
+  max_hour: number;
+  submittable_start_date: string;
+  enabled_genre_ids: number[];
+}
+
+/** 曜日ごとの基本シフト。未提出期間の初期値に使う */
+export interface BasicShift {
+  weekday: number; // 0=日 .. 6=土
+  attending_store_id: number;
+  start_hour: number;
+  start_minute: number;
+  end_hour: number;
+  end_minute: number;
+  off: boolean;
+}
+
+/** 曜日ごとの勤務可能時間帯。入力値をこの範囲に丸める */
+export interface AcceptableWorkingTime {
+  weekday: number;
+  start_hour: number;
+  start_minute: number;
+  end_hour: number;
+  end_minute: number;
+  off: boolean;
+}
+
+/** 休み希望の上限。has_limit が false なら max_count は null */
+export interface DesiredOffLimit {
+  has_limit: boolean;
+  max_count: number | null;
+}
+
+/** 提出済みの希望シフト1件 */
+export interface DesiredSchedule {
+  id: number;
+  date: string;
+  attending_store_id: number;
+  attending_genre_id: number;
+  start_hour: number;
+  start_minute: number;
+  end_hour: number;
+  end_minute: number;
+  off: boolean;
+  off_type: number;
+  memo_text: string | null;
+  fixed_shift_log_id: number | null;
+}
+
+/** upsert に送る希望の中身。null なら「その日は希望を出さない」 */
+export interface DesiredScheduleInput {
+  attending_store_id: number;
+  attending_genre_id: number;
+  start_hour: number;
+  start_minute: number;
+  end_hour: number;
+  end_minute: number;
+  off: boolean;
+  off_type: number;
+}
+
+/** upsert の shifts 要素。期間内の全日付を送る必要がある */
+export interface ShiftUpsertItem {
+  date: string;
+  memo_text: string | null;
+  fixed_shift_log_id: number | null;
+  desired_schedule: DesiredScheduleInput | null;
+}
+
+/** /api/submit-context が返す、提出画面の初期コンテキスト */
+export interface SubmitContextResponse {
+  /** 自分の所属職種。upsert の attending_genre_id に使う */
+  currentGenreId: number;
+  terms: SubmitTerm[];
+  stores: SubmittableStore[];
+  basicShifts: BasicShift[];
+  acceptableTimes: AcceptableWorkingTime[];
+  offLimit: DesiredOffLimit;
+}
+
+/** らくしふの off_type。0 以外は有休・特別休暇の種別 */
+export const OFF_TYPE = {
+  Default: 0,
+  FullPaidLeave: 1,
+  HalfPaidLeave: 2,
+  CompanySpecialHoliday: 3,
+  AmOff: 4,
+  PmOff: 5,
+} as const;
+
+export type OffType = (typeof OFF_TYPE)[keyof typeof OFF_TYPE];
+
+/** 1日ぶんの入力状態。none=希望なし, work=出勤希望, off=休み希望 */
+export type DayKind = 'none' | 'work' | 'off';
+
+/**
+ * 提出フォームが持つ1日ぶんの状態。
+ * 時刻は StoreShiftMember と同じ「0:00 からの分」で持つ。
+ */
+export interface DayEntry {
+  date: string;
+  kind: DayKind;
+  startAsMin: number;
+  endAsMin: number;
+  offType: OffType;
+  memo: string;
+  /** 非 null なら確定済みで編集不可 */
+  fixedShiftLogId: number | null;
+}
