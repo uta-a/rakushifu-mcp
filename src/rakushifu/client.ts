@@ -2,6 +2,7 @@ import type {
   DesiredSchedule,
   Schedule,
   ShiftApiResponse,
+  ShiftUpsertItem,
   StoreShiftsResponse,
   SubmitContextResponse,
 } from '../types/shift.js';
@@ -338,4 +339,196 @@ export async function getDesiredSchedules(cookies: string, startDate: string, en
     memo_text: s.memo_text,
     fixed_shift_log_id: s.fixed_shift_log_id,
   }));
+}
+
+/** 提出期間は半月単位。2ヶ月ぶんを上限にして、巨大なボディを上流へ送らない */
+const MAX_SHIFTS = 62;
+const MAX_MEMO_LENGTH = 500;
+/** 日跨ぎの終了時刻を許すため 24 時を超える値も受ける */
+const MAX_HOUR = 47;
+/** off_type は Default(0) 〜 PmOff(5) */
+const MAX_OFF_TYPE = 5;
+/** 上流が返す 422 の detail をそのまま出す際の上限 */
+const MAX_DETAIL_LENGTH = 200;
+
+/** "k=v; k=v" を名前→値に開く */
+function parseCookieHeader(cookieString: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const part of cookieString.split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    result[part.slice(0, index).trim()] = part.slice(index + 1).trim();
+  }
+  return result;
+}
+
+function isIntInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
+/**
+ * 送信内容を検証し、検証を通った値だけで組み直す（spread は使わない）。
+ * 組み立てはこのサーバー内で行うが、らくしふへ任意の値を送らないための最後の防御として残す。
+ */
+export function sanitizeShifts(raw: ShiftUpsertItem[]): ShiftUpsertItem[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_SHIFTS) {
+    throw new RakushifuError(`提出する日数が不正です（1〜${MAX_SHIFTS}日）`);
+  }
+
+  const items: ShiftUpsertItem[] = [];
+  const seen = new Set<string>();
+
+  for (const shift of raw) {
+    const date = shift?.date;
+    if (typeof date !== 'string' || !DATE_PATTERN.test(date)) {
+      throw new RakushifuError('日付の形式が不正です');
+    }
+    if (seen.has(date)) {
+      throw new RakushifuError(`日付が重複しています: ${date}`);
+    }
+    seen.add(date);
+
+    const memo = shift.memo_text ?? null;
+    if (memo !== null && (typeof memo !== 'string' || memo.length > MAX_MEMO_LENGTH)) {
+      throw new RakushifuError(`メモは${MAX_MEMO_LENGTH}文字以内で入力してください`);
+    }
+
+    const fixedShiftLogId = shift.fixed_shift_log_id ?? null;
+    if (fixedShiftLogId !== null && !isIntInRange(fixedShiftLogId, 1, 9_999_999_999)) {
+      throw new RakushifuError('確定シフトの指定が不正です');
+    }
+
+    const d = shift.desired_schedule ?? null;
+    // 確定済みの日を書き換える内容は送らない
+    if (fixedShiftLogId !== null && d !== null) {
+      throw new RakushifuError('確定済みの日は変更できません');
+    }
+    if (d === null) {
+      items.push({ date, memo_text: memo, fixed_shift_log_id: fixedShiftLogId, desired_schedule: null });
+      continue;
+    }
+
+    if (!isIntInRange(d.attending_store_id, 1, 9_999_999)) {
+      throw new RakushifuError('勤務店舗が不正です');
+    }
+    if (!isIntInRange(d.attending_genre_id, 0, 9_999_999)) {
+      throw new RakushifuError('職種が不正です');
+    }
+    if (!isIntInRange(d.start_hour, 0, MAX_HOUR) || !isIntInRange(d.end_hour, 0, MAX_HOUR)) {
+      throw new RakushifuError('時刻（時）が不正です');
+    }
+    if (!isIntInRange(d.start_minute, 0, 59) || !isIntInRange(d.end_minute, 0, 59)) {
+      throw new RakushifuError('時刻（分）が不正です');
+    }
+    if (typeof d.off !== 'boolean') {
+      throw new RakushifuError('休み希望の指定が不正です');
+    }
+    if (!isIntInRange(d.off_type, 0, MAX_OFF_TYPE)) {
+      throw new RakushifuError('休みの種別が不正です');
+    }
+
+    items.push({
+      date,
+      memo_text: memo,
+      fixed_shift_log_id: null,
+      desired_schedule: {
+        attending_store_id: d.attending_store_id,
+        attending_genre_id: d.attending_genre_id,
+        start_hour: d.start_hour,
+        start_minute: d.start_minute,
+        end_hour: d.end_hour,
+        end_minute: d.end_minute,
+        off: d.off,
+        off_type: d.off_type,
+      },
+    });
+  }
+
+  return items;
+}
+
+/**
+ * 希望シフトを提出（upsert）する。
+ *
+ * らくしふの更新系は Rails の CSRF 保護下にあり、提出ページの HTML に埋め込まれた
+ * data-csrf-token を X-CSRF-Token で送る必要がある。トークンはセッションと対なので、
+ * HTML 取得時に返ってきた _Rakushifu_session に差し替えてから POST する。
+ *
+ * upsert は期間を丸ごと置き換えるので、items には期間内の全日付を含めること。
+ */
+export async function submitDesiredSchedules(cookies: string, rawItems: ShiftUpsertItem[]): Promise<{ count: number }> {
+  const items = sanitizeShifts(rawItems);
+  const submitPage = `${BASE_URL}${SUBMIT_PAGE_PATH}`;
+  const commonHeaders = { Cookie: cookies, 'User-Agent': USER_AGENT, Referer: submitPage };
+
+  try {
+    // 1. 提出ページの HTML から CSRF トークンを取る
+    const pageRes = await fetch(submitPage, {
+      headers: { ...commonHeaders, Accept: 'text/html,application/xhtml+xml' },
+      redirect: 'manual',
+    });
+    if (pageRes.status === 401 || (pageRes.status >= 300 && pageRes.status < 400)) {
+      throw new RakushifuError('らくしふのセッションが無効です');
+    }
+    if (!pageRes.ok) {
+      throw new RakushifuError(`提出ページの取得に失敗しました (HTTP ${pageRes.status})`);
+    }
+
+    // 属性の並び順に依存しないよう、タグを取ってから値を取る2段構え
+    const html = await pageRes.text();
+    const tag = html.match(/<[^>]*\bid="csrf-token"[^>]*>/)?.[0];
+    const token = tag?.match(/data-csrf-token="([^"]+)"/)?.[1];
+    if (!token || !/^[A-Za-z0-9+/=_-]{40,200}$/.test(token)) {
+      // らくしふ側の HTML 構造が変わった可能性が高いので、他の失敗と文言を分ける
+      throw new RakushifuError('提出トークンの取得に失敗しました（らくしふの画面構成が変わった可能性があります）');
+    }
+
+    // 2. HTML 取得で回転したセッション cookie に差し替える。トークンはこのセッションと対でしか通らない
+    const refreshed = parseCookieValue(getSetCookies(pageRes.headers));
+    const mergedCookies = buildCookieString({ ...parseCookieHeader(cookies), ...refreshed });
+
+    // 3. 検証済みの値だけで組み直したボディを送る
+    const upsertRes = await fetch(`${BASE_URL}/typed/api/staff/schedules/upsert`, {
+      method: 'POST',
+      headers: {
+        ...commonHeaders,
+        Accept: 'application/json, text/plain, */*',
+        Cookie: mergedCookies,
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': token,
+        'Xbit-Accept-Language': 'ja',
+        'Xbit-Device-Type': 'web',
+        Origin: BASE_URL,
+      },
+      body: JSON.stringify({ shifts: items }),
+    });
+
+    if (upsertRes.status === 422) {
+      const detail = (await upsertRes.json().catch(() => null)) as
+        | { detail?: unknown; invalid_params?: unknown }
+        | null;
+      // 上流の内部情報が混ざりうるので、素性のはっきりした短い文字列だけ通す
+      const message =
+        typeof detail?.detail === 'string' && detail.detail.length <= MAX_DETAIL_LENGTH
+          ? detail.detail
+          : '入力内容に誤りがあります';
+      const invalidDates = (Array.isArray(detail?.invalid_params) ? detail.invalid_params : [])
+        .map((p: unknown) => (p as { name?: unknown })?.name)
+        .filter((name: unknown): name is string => typeof name === 'string' && DATE_PATTERN.test(name))
+        .slice(0, MAX_SHIFTS);
+      throw new RakushifuError(
+        `らくしふが提出を受け付けませんでした: ${message}${invalidDates.length > 0 ? `（対象日: ${invalidDates.join(', ')}）` : ''}`
+      );
+    }
+    if (!upsertRes.ok) {
+      throw new RakushifuError(`シフトの提出に失敗しました (HTTP ${upsertRes.status})`);
+    }
+
+    // 上流のボディは返さない（提出できたかどうかだけが必要）
+    return { count: items.length };
+  } catch (err) {
+    if (err instanceof RakushifuError) throw err;
+    // cookie や提出ページの HTML が混ざりうるので、例外の中身は出さない
+    throw new RakushifuError('シフトの提出中にエラーが発生しました');
+  }
 }

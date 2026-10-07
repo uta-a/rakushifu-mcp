@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConfirmedSchedules, getDesiredSchedules, getStoreShifts, getSubmitContext, login, RakushifuError } from './client.js';
+import {
+  getConfirmedSchedules,
+  getDesiredSchedules,
+  getStoreShifts,
+  getSubmitContext,
+  login,
+  RakushifuError,
+  sanitizeShifts,
+  submitDesiredSchedules,
+} from './client.js';
+import type { ShiftUpsertItem } from '../types/shift.js';
 import { buildCookieString, parseCookieValue } from './cookies.js';
 
 function responseWithCookies(status: number, setCookies: string[]): Response {
@@ -212,5 +222,88 @@ describe('getDesiredSchedules', () => {
     const result = await getDesiredSchedules('c=1', '2026-10-16', '2026-10-31');
     expect(result).toHaveLength(1);
     expect(result[0]).not.toHaveProperty('user_id');
+  });
+});
+
+const CSRF = 'A'.repeat(60);
+
+function upsertItem(overrides: Partial<ShiftUpsertItem> = {}): ShiftUpsertItem {
+  return {
+    date: '2026-10-16',
+    memo_text: null,
+    fixed_shift_log_id: null,
+    desired_schedule: {
+      attending_store_id: 555,
+      attending_genre_id: 2,
+      start_hour: 17,
+      start_minute: 0,
+      end_hour: 22,
+      end_minute: 0,
+      off: false,
+      off_type: 0,
+    },
+    ...overrides,
+  };
+}
+
+describe('sanitizeShifts', () => {
+  it('確定済みの日に希望を送る内容や重複した日付を拒否する', () => {
+    expect(() => sanitizeShifts([upsertItem({ fixed_shift_log_id: 1 })])).toThrow('確定済み');
+    expect(() => sanitizeShifts([upsertItem(), upsertItem()])).toThrow('重複');
+    expect(() => sanitizeShifts([])).toThrow(RakushifuError);
+  });
+
+  it('余計なプロパティを落として組み直す', () => {
+    const [item] = sanitizeShifts([{ ...upsertItem(), extra: 1 } as ShiftUpsertItem]);
+    expect(item).not.toHaveProperty('extra');
+  });
+});
+
+describe('submitDesiredSchedules', () => {
+  it('提出ページの CSRF トークンと更新されたセッション cookie で upsert を送る', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(`<html><meta name="x"><div data-csrf-token="${CSRF}" id="csrf-token"></div></html>`, {
+          status: 200,
+          headers: { 'set-cookie': '_Rakushifu_session=NEW; Path=/' },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await submitDesiredSchedules('xbit_at=AT; _Rakushifu_session=OLD', [upsertItem()]);
+
+    expect(result).toEqual({ count: 1 });
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(url).toContain('/typed/api/staff/schedules/upsert');
+    expect(init.headers['X-CSRF-Token']).toBe(CSRF);
+    expect(init.headers.Cookie).toBe('xbit_at=AT; _Rakushifu_session=NEW');
+    expect(JSON.parse(init.body).shifts).toHaveLength(1);
+  });
+
+  it('422 は上流の短い説明と対象日を付けたエラーにする', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(`<div id="csrf-token" data-csrf-token="${CSRF}"></div>`, { status: 200 }))
+        .mockResolvedValueOnce(jsonResponse({ detail: '入力に誤りがあります', invalid_params: [{ name: '2026-10-16' }, { name: 'x' }] }, 422))
+    );
+    await expect(submitDesiredSchedules('c=1', [upsertItem()])).rejects.toThrow('入力に誤りがあります（対象日: 2026-10-16）');
+  });
+
+  it('CSRF トークンが見つからなければ upsert を送らない', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('<html></html>', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(submitDesiredSchedules('c=1', [upsertItem()])).rejects.toThrow('提出トークン');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('セッション切れ（リダイレクト）なら upsert を送らない', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(null, { status: 302 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(submitDesiredSchedules('c=1', [upsertItem()])).rejects.toThrow('セッション');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

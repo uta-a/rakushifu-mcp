@@ -79,13 +79,26 @@ describe('handleRequest', () => {
     expect((await handleRequest(req)).status).toBe(200);
   });
 
-  it('正しいトークンなら tools/list に2つのツールが読み取り専用で出る', async () => {
+  it('正しいトークンなら tools/list に全ツールが出て、提出だけが破壊的な操作になっている', async () => {
     const res = await handleRequest(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
     expect(res.status).toBe(200);
     const body = await readRpc(res);
     const tools = body.result.tools;
-    expect(tools.map((t: { name: string }) => t.name).sort()).toEqual(['calculate_salary', 'get_confirmed_shifts', 'get_desired_shifts', 'get_shift_overlaps']);
-    for (const tool of tools) expect(tool.annotations.readOnlyHint).toBe(true);
+    expect(tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      'calculate_salary',
+      'get_confirmed_shifts',
+      'get_desired_shifts',
+      'get_shift_overlaps',
+      'preview_desired_shifts',
+      'submit_desired_shifts',
+    ]);
+    for (const tool of tools) {
+      if (tool.name === 'submit_desired_shifts') {
+        expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+      } else {
+        expect(tool.annotations.readOnlyHint).toBe(true);
+      }
+    }
   });
 
   it('ヘッダーの従業員コードとパスワードを環境変数より優先してログインし、結果にパスワードを含めない', async () => {

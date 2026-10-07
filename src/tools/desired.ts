@@ -5,6 +5,7 @@ import { buildDayEntries, defaultTermIndex, hmToMinutes, isTermClosed } from '..
 import type {
   BasicShift,
   DayEntry,
+  DesiredSchedule,
   SubmitContextResponse,
   SubmitTerm,
   SubmittableStore,
@@ -33,6 +34,8 @@ export interface TermState {
   term: SubmitTerm;
   store: SubmittableStore;
   closed: boolean;
+  /** らくしふに提出済みの希望（期間内）。店舗と職種は DayEntry に無いので、送り直すときに使う */
+  existing: DesiredSchedule[];
   /** 期間内の全日付。提出済みの内容をそのまま反映し、未提出の日は希望なし */
   entries: DayEntry[];
 }
@@ -66,7 +69,7 @@ export async function loadTermState(session: DesiredSource, termStartDate: strin
   // 未提出の日を基本シフトで埋めない（submitted: true 扱い）。指定しなかった日は希望なしにする方針
   const entries = buildDayEntries({ ...term, submitted: true }, existing, [], [], store);
 
-  return { context, term, store, closed: isTermClosed(term, now), entries };
+  return { context, term, store, closed: isTermClosed(term, now), existing, entries };
 }
 
 export function describeEntry(entry: DayEntry) {

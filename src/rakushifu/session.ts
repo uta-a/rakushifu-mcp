@@ -1,6 +1,19 @@
 import type { Credentials } from '../config.js';
-import type { DesiredSchedule, Schedule, StoreShiftsResponse, SubmitContextResponse } from '../types/shift.js';
-import { getConfirmedSchedules, getDesiredSchedules, getStoreShifts, getSubmitContext, login } from './client.js';
+import type {
+  DesiredSchedule,
+  Schedule,
+  ShiftUpsertItem,
+  StoreShiftsResponse,
+  SubmitContextResponse,
+} from '../types/shift.js';
+import {
+  getConfirmedSchedules,
+  getDesiredSchedules,
+  getStoreShifts,
+  getSubmitContext,
+  login,
+  submitDesiredSchedules,
+} from './client.js';
 
 /**
  * 1回のツール呼び出しの中で使う、らくしふへの操作の窓口。
@@ -11,6 +24,8 @@ export interface RakushifuSession {
   getStoreShifts(storeId: number, date: string): Promise<StoreShiftsResponse>;
   getSubmitContext(): Promise<SubmitContextResponse>;
   getDesiredSchedules(startDate: string, endDate: string): Promise<DesiredSchedule[]>;
+  /** 期間を丸ごと置き換える。items には期間内の全日付を含めること */
+  submitDesiredSchedules(items: ShiftUpsertItem[]): Promise<{ count: number }>;
 }
 
 export function createSession(credentials: Credentials): RakushifuSession {
@@ -22,5 +37,6 @@ export function createSession(credentials: Credentials): RakushifuSession {
     getStoreShifts: async (storeId, date) => getStoreShifts(await cookies(), storeId, date),
     getSubmitContext: async () => getSubmitContext(await cookies()),
     getDesiredSchedules: async (startDate, endDate) => getDesiredSchedules(await cookies(), startDate, endDate),
+    submitDesiredSchedules: async (items) => submitDesiredSchedules(await cookies(), items),
   };
 }
