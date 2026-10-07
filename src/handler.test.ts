@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { handleRequest } from './server.js';
+import { handleRequest } from './handler.js';
 
 const TOKEN = 't'.repeat(40);
 const URL_BASE = 'https://example.vercel.app/api/mcp';
